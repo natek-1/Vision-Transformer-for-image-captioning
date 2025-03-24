@@ -28,7 +28,7 @@ Ensure you have the following installed:
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/natek-1/Vision-Transformer-for-image-captioning.git
-   cd image-captioning
+   cd Vision-Transformer-for-image-captioning
    ```
 2. **Install dependencies**:
    ```bash
