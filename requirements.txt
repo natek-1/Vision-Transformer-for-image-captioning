@@ -14,3 +14,6 @@ tqdm==4.66.3
 spacy
 nltk
 ipywidgets
+tensorboard-pytorch==1.15
+protobuf==3.20
+tensorboard
