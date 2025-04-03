@@ -7,13 +7,13 @@ numpy==1.23.5
 opencv-python==4.8.0.74
 pandas==2.0.1
 Pillow==9.5.0
-torch==2.1.0
-torchtext==0.16.0
-torchvision==0.16.0
+torch==2.6.0
+torchtext==0.2.1
+torchvision==0.21.0
 tqdm==4.66.3
 spacy
 nltk
 ipywidgets
-tensorboard-pytorch==1.15
+tensorboard-pytorch==0.2
 protobuf==3.20
 tensorboard
