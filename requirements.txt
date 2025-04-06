@@ -17,3 +17,4 @@ ipywidgets
 tensorboard-pytorch==0.2
 protobuf==3.20
 tensorboard
+tiktoken
