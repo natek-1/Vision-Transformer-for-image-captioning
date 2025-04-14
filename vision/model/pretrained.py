@@ -277,7 +277,8 @@ class Captioner(nn.Module):
         
         return start_output.tolist()
     
-    def greedy(self, image, max_new_tokens=45):
+    def greedy(self, image, max_new_tokens=45, pad_token = 50256):
+        batch_size = image.shape[0]
         encoder_out = self.vit(image).pooler_output # (batch_size, embed_dim)
         pos = torch.arange(0, 1, dtype=torch.long, device=image.device)
         pos_embed = self.gpt2.transformer.wpe(pos)
@@ -287,10 +288,23 @@ class Captioner(nn.Module):
         logits = self.gpt2.lm_head(self.gpt2.transformer.ln_f(x))
         start_output =logits.argmax(dim=-1) # (batch_size, 1, vocacb_size) -> (batch_size, 1)
         
+        attention_mask = torch.ones((batch_size, 1), dtype=torch.long, device=image.device) # First token should be atteneded
+        finished_sequences = [False] * batch_size
+        
         for _ in range(max_new_tokens-1):
-            logits = self.gpt2(start_output, encoder_out)
+            if all(finished_sequences):
+                break
+            logits = self.gpt2(start_output, encoder_out, attention_mask)
             logits = logits[:,-1,:]# (batch_size, vocab_size)
-            xcol = logits.argmax(dim=-1, keepdim=True)
+            xcol = logits.argmax(dim=-1, keepdim=True) #(batch_size, 1)
             start_output = torch.cat([start_output, xcol], dim=-1)
+            
+            new_token_mask = torch.ones((batch_size, 1), dtype=torch.long, device=attention_mask.device)
+            for i in range(batch_size):
+                if xcol[i].item() == pad_token and not finished_sequences[i]:
+                    finished_sequences[i] = True
+                if finished_sequences[i] or xcol[i].item() == pad_token:
+                    new_token_mask[i, 0] = 0
+            attention_mask = torch.cat([attention_mask, new_token_mask], dim=-1)
         
         return start_output.tolist()

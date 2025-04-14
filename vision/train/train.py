@@ -46,7 +46,7 @@ def compute_loss(logits, labels, mask, loss_fct):
     return loss
 
 def train_epoch(train_loader, model, device, criterion, optimizer, epoch, writer, global_step,
-                teacher_force = True, teacher_forcing_ratio_start=0.8, teacher_forcing_ratio_end=0, epochs=5, vocab_size=50256):
+                teacher_force = True, teacher_forcing_ratio_start=0.8, teacher_forcing_ratio_end=0, epochs=5, vocab_size=50257):
     losses = []
 
     model.train()
@@ -76,11 +76,18 @@ def train_epoch(train_loader, model, device, criterion, optimizer, epoch, writer
                 logits = model.gpt2(start_output, encoder_output, start_att)[:,-1,:] # (batch_size, vocab_size)
                 predictions[:, t] = logits.squeeze(1)
                 use_teacher_forcing = random.random() < teacher_forcing_ratio
+                
                 if use_teacher_forcing:
                     start_output = torch.cat([start_output, caps[:, t].unsqueeze(1)], dim=1)
+                    start_att = torch.cat([start_att, att_mask[t].unsqueeze(1)], dim=1)
                 else:
+                    new_token_mask = torch.ones((imgs.shape[0], 1), dtype=torch.long, device=imgs.device)
+                    for i in range(imgs.shape[0]):
+                        if predictions[i].argmax(-1).item() == vocab_size-1:
+                            new_token_mask[i, 0] = 0
                     start_output = torch.cat([start_output, logits.argmax(dim=-1, keepdim=True)], dim=1)
-                start_att = att_mask[:,:t+1]
+                    start_att = torch.cat([start_att, new_token_mask], dim=1)
+                #start_att = att_mask[:,:t+1]
 
 
         loss = compute_loss(predictions, caps, att_mask, criterion)
