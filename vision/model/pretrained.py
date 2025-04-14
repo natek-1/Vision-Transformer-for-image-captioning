@@ -222,7 +222,7 @@ class Captioner(nn.Module):
             param.requires_grad = False
             
         model_name = "gpt2"
-        self.gpt2 = (model_name)
+        self.gpt2 = GPT.from_pretrained(model_name)
         #self.gpt2.config.pad_token_id = self.gpt2.config.eos_token_id
         
         
