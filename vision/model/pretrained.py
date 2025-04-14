@@ -16,7 +16,7 @@ class GPTConfig:
     n_layer: int = 12 # number of layers
     n_head: int = 12 # number of attention heads
     n_embed: int = 768 # embedding dimension
-    dropout: float = 0.1
+    dropout: float = 0.3
 
 class CasualSelfAttention(nn.Module):
     
@@ -76,7 +76,7 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embed, 4*config.n_embed)
         self.gelu = nn.GELU(approximate="tanh")
         self.c_proj = nn.Linear(4 * config.n_embed, config.n_embed)
-        self.dropout = nn.Dropout()
+        self.dropout = nn.Dropout(config.dropout)
         self.c_proj.NANOGPT_SCALE_INIT = 1
     
     def forward(self, x):
