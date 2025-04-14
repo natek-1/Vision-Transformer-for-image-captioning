@@ -1,5 +1,5 @@
 import math
-from dataclasses import dataclass\
+from dataclasses import dataclass
 
 import torch
 from torch import nn
@@ -16,6 +16,7 @@ class GPTConfig:
     n_layer: int = 12 # number of layers
     n_head: int = 12 # number of attention heads
     n_embed: int = 768 # embedding dimension
+    dropout: float = 0.1
 
 class CasualSelfAttention(nn.Module):
     
@@ -29,6 +30,9 @@ class CasualSelfAttention(nn.Module):
         # output
         self.c_proj = nn.Linear(config.n_embed, config.n_embed)
         self.c_proj.NANOGPT_SCALE_INIT = 1
+        
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
         #regularization
         self.n_head = config.n_head
         self.n_embed = config.n_embed
@@ -58,9 +62,10 @@ class CasualSelfAttention(nn.Module):
             
         att = att.masked_fill(mask == 0, float("-inf"))
         att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
         y = att @ v # (b, nh, seq_len, seq_len) x (b, nh, seq_len, hs) -> (b, nh, seq_len, hs)
         y = y.transpose(1, 2).contiguous().view(batch_size, seq_len, embed_dim)
-        return self.c_proj(y)
+        return self.resid_dropout(self.c_proj(y))
     
 class MLP(nn.Module):
     
@@ -71,10 +76,11 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embed, 4*config.n_embed)
         self.gelu = nn.GELU(approximate="tanh")
         self.c_proj = nn.Linear(4 * config.n_embed, config.n_embed)
+        self.dropout = nn.Dropout()
         self.c_proj.NANOGPT_SCALE_INIT = 1
     
     def forward(self, x):
-        return self.c_proj(self.gelu(self.c_fc(x)))
+        return self.dropout(self.c_proj(self.gelu(self.c_fc(x))))
 
 class Block(nn.Module):
     
@@ -101,6 +107,7 @@ class GPT(nn.Module):
             dict(
                 wte = nn.Embedding(config.vocab_size, config.n_embed), # typical(token) embedding 
                 wpe = nn.Embedding(config.block_size, config.n_embed), # positional emebeding
+                drop = nn.Dropout(config.dropout),
                 h = nn.ModuleList(Block(config) for _ in range(config.n_layer)),
                 ln_f = nn.LayerNorm(config.n_embed)
             )
@@ -139,7 +146,7 @@ class GPT(nn.Module):
         
         pos = torch.arange(0, seq_len, dtype=torch.long, device=idx.device)
         pos_embed = self.transformer.wpe(pos) # shape (seq_len, n_emebd)
-        x = pos_embed + token_embed # broadcasting occurs resulting in output of shape batch_size, seq_len, n_embed
+        x = self.transformer.drop(pos_embed + token_embed) # broadcasting occurs resulting in output of shape batch_size, seq_len, n_embed
         
         if attn_mask is not None:
             cls_attention = torch.ones((batch_size, 1), device=attn_mask.device)
@@ -215,7 +222,7 @@ class Captioner(nn.Module):
             param.requires_grad = False
             
         model_name = "gpt2"
-        self.gpt2 = GPT.from_pretrained(model_name)
+        self.gpt2 = (model_name)
         #self.gpt2.config.pad_token_id = self.gpt2.config.eos_token_id
         
         
