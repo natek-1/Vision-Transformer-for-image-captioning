@@ -4,6 +4,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from transformers import ViTModel
+
+
 
 class PatchEmbedding(nn.Module):
     '''
@@ -232,5 +235,26 @@ class GPT(nn.Module):
         
         logits = self.lm_head(x) # result of shape batch_size, seq_len, vocab_size
         return logits
+
+class Captioner(nn.Module):
+    
+    def __init__(self,vocab_size, max_seq_len, padding_idx, img_size= 224, in_channels=3, patch_size=16, num_blocks = 12,
+                 embed_dim = 768, mlp_size = 3072, num_heads = 12, dropout=0.1):
+        super().__init__()
+        self.vit = ViT(
+            img_size=img_size, in_channels=in_channels, patch_size=patch_size, embed_dim=embed_dim,
+            num_blocks=num_blocks, mlp_size=mlp_size, num_heads=num_heads, dropout=dropout)
+        vit_name = "google/vit-base-patch16-224-in21k"
+        self.vit = ViTModel.from_pretrained(vit_name)
+        for param in self.vit.parameters():
+            param.requires_grad = False
+        
+        self.gpt2 = GPT(
+            vocab_size=vocab_size, max_seq_len=max_seq_len, padding_idx=padding_idx, embed_dim=embed_dim,
+            mlp_size=mlp_size, num_layers=num_blocks, num_heads=num_heads, dropout=dropout)
+        
+    def forward(self, image, caption, attn_mask):
+        encoder_out = self.vit(image)
+        return self.gpt2(caption, encoder_out, attn_mask)
 
 

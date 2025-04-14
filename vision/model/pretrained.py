@@ -229,7 +229,7 @@ class Captioner(nn.Module):
         return self.gpt2(caption, encoder_out, attn_mask)
     
     @torch.no_grad
-    def generate(self, image, max_new_tokens=45, temperature=0.1, top_k=50, end_token=vocab.tokenizer.eos_token):
+    def generate(self, image, max_new_tokens=45, temperature=0.1, top_k=50, end_token=50256):
         caption = []
         encoder_out = self.vit(image).pooler_output # (batch_size, embed_dim)
         start_output = torch.tensor([[]]*image.shape[0], device=image.device, dtype=torch.long)
@@ -246,7 +246,7 @@ class Captioner(nn.Module):
     
 
     @torch.no_grad
-    def manual_generate(self, image, max_new_tokens=45, temperature=0.1, top_k=50, end_token=vocab.tokenizer.eos_token):
+    def manual_generate(self, image, max_new_tokens=45, temperature=0.1, top_k=50, end_token=50256):
         encoder_out = self.vit(image).pooler_output # (batch_size, embed_dim)
         pos = torch.arange(0, 1, dtype=torch.long, device=image.device)
         pos_embed = self.gpt2.transformer.wpe(pos)
