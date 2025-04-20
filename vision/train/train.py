@@ -46,7 +46,7 @@ def compute_loss(logits, labels, mask, loss_fct):
     return loss
 
 def train_epoch(train_loader, model, device, criterion, optimizer, epoch, writer, global_step,
-                teacher_force = True, teacher_forcing_ratio_start=0.8, teacher_forcing_ratio_end=0, epochs=5, vocab_size=50257):
+                teacher_force = False, teacher_forcing_ratio_start=0.8, teacher_forcing_ratio_end=0, epochs=5, vocab_size=50257):
     losses = []
 
     model.train()
@@ -79,20 +79,19 @@ def train_epoch(train_loader, model, device, criterion, optimizer, epoch, writer
                 
                 if use_teacher_forcing:
                     start_output = torch.cat([start_output, caps[:, t].unsqueeze(1)], dim=1)
-                    start_att = torch.cat([start_att, att_mask[t].unsqueeze(1)], dim=1)
+                    start_att = torch.cat([start_att, att_mask[:,t].unsqueeze(1)], dim=1)
                 else:
                     new_token_mask = torch.ones((imgs.shape[0], 1), dtype=torch.long, device=imgs.device)
                     for i in range(imgs.shape[0]):
-                        if predictions[i].argmax(-1).item() == vocab_size-1:
+                        if logits[i].argmax(-1).item() == vocab_size-1:
                             new_token_mask[i, 0] = 0
                     start_output = torch.cat([start_output, logits.argmax(dim=-1, keepdim=True)], dim=1)
                     start_att = torch.cat([start_att, new_token_mask], dim=1)
-                #start_att = att_mask[:,:t+1]
 
 
-        loss = compute_loss(predictions, caps, att_mask, criterion)
+        loss = compute_loss(predictions, caps, start_att, criterion)
         loss.backward()
-        #torch.nn.utils.clip_grad_norm_(captioner.parameters(), max_norm=1.)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
         optimizer.step()
         
         batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
@@ -101,6 +100,7 @@ def train_epoch(train_loader, model, device, criterion, optimizer, epoch, writer
 
         # keep track of metrics
         losses.append(loss.item())
+        break
         
 
     print('Training Epoch #: [{0}]\t'
@@ -127,7 +127,7 @@ def val_epoch(model, device, validation_loader, vocabulary, criterion, global_st
             # forward prop
             sample_caption = captions[:,0,:].clone()
             sample_att_mask = att_mask[:,0,:].clone()
-            predictions = model(images, sample_caption[:,:-1], sample_att_mask[:,:-1])
+            predictions = model.greedy(images)
 
             loss = compute_loss(predictions, sample_caption, sample_att_mask, criterion)
 
@@ -143,14 +143,8 @@ def val_epoch(model, device, validation_loader, vocabulary, criterion, global_st
                 for j in range(captions.shape[1]):
                     caps.append(vocabulary.decode(captions[i,j].tolist()).split())
                 references.append(caps)
-
-            predictions = predictions.argmax(dim=-1).tolist() # batch_size, seq_len
-            for pred in predictions:
-                alt_hyp.append(vocabulary.decode(pred).split())
-            
             
             # Hypothesis
-            predictions = model.greedy(images)
             for prediction in predictions:
                 hypotheses.append(vocabulary.decode(prediction).split())
             
@@ -181,28 +175,6 @@ def val_epoch(model, device, validation_loader, vocabulary, criterion, global_st
         
         print(f'''Validation Epoch: {epoch}
               Val Loss: {np.mean(epoch_loss)}
-              BLEU-1: {bleu_1}
-              BLEU-2: {bleu_2}
-              BLEU-3: {bleu_3}
-              BLEU-4: {bleu_4}
-              Meteor: {meteor}''')
-
-        index = random.sample([i for i in range(len(alt_hyp))], num_examples)
-        for idx in index:
-            print("Here is the model prediction")
-            print(alt_hyp[idx])
-            print("-"*100)
-            print("Here are what the references look like")
-            for i in range(5):
-                print(references[idx][i])
-            print("-"*100)
-        
-        bleu_1 = corpus_bleu(references, alt_hyp, weights=(1, 0, 0, 0))
-        bleu_2 = corpus_bleu(references, alt_hyp, weights=(0.5, 0.5, 0, 0))
-        bleu_3 = corpus_bleu(references, alt_hyp, weights=(0.33, 0.33, 0.33, 0))
-        bleu_4 = corpus_bleu(references, alt_hyp)
-        meteor = corpus_meteor(references, alt_hyp)
-        print(f'''Validation Epoch (with teacher forcing): {epoch}
               BLEU-1: {bleu_1}
               BLEU-2: {bleu_2}
               BLEU-3: {bleu_3}
