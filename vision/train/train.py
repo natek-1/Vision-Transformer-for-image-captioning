@@ -127,9 +127,23 @@ def val_epoch(model, device, validation_loader, vocabulary, criterion, global_st
             # forward prop
             sample_caption = captions[:,0,:].clone()
             sample_att_mask = att_mask[:,0,:].clone()
-            predictions = model.greedy(images)
+            
+            encoder_output = model.vit(images).pooler_output # (batch_size, embed_dim)
+            predictions = torch.zeros(sample_caption.shape[0], sample_caption.shape[1], vocabulary.vocab_size(), device=images.device)
+            start_output = torch.tensor([[]]*images.shape[0], device=images.device, dtype=torch.long) # batch_size, 1
+            start_att = torch.tensor([[]]*images.shape[0], device=images.device, dtype=torch.long) # batch_size, 1
+            
+            for t in range(sample_caption.shape[1]):
+                logits = model.gpt2(start_output, encoder_output, start_att)[:,-1,:] # (batch_size, vocab_size)
+                predictions[:, t] = logits.squeeze(1)
+                new_token_mask = torch.ones((images.shape[0], 1), dtype=torch.long, device=images.device)
+                for i in range(images.shape[0]):
+                    if logits[i].argmax(-1).item() == vocabulary.vocab_size()-1:
+                        new_token_mask[i, 0] = 0
+                start_output = torch.cat([start_output, logits.argmax(dim=-1, keepdim=True)], dim=1)
+                start_att = torch.cat([start_att, new_token_mask], dim=1)
 
-            loss = compute_loss(predictions, sample_caption, sample_att_mask, criterion)
+            loss = compute_loss(predictions, sample_caption, start_att, criterion)
 
             # keep track of metrics
             epoch_loss.append(loss.item())
@@ -145,6 +159,7 @@ def val_epoch(model, device, validation_loader, vocabulary, criterion, global_st
                 references.append(caps)
             
             # Hypothesis
+            predictions = predictions.argmax(dim=-1).tolsit()
             for prediction in predictions:
                 hypotheses.append(vocabulary.decode(prediction).split())
             
