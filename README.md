@@ -94,6 +94,25 @@ Example API request:
 curl -X POST -F "file=@image.jpg" http://localhost:5000/predict
 ```
 
+## Reference
+
+This project is based on the following paper:
+
+**S. Mishra et al.**, *Image Caption Generation using Vision Transformer and GPT Architecture*,  
+2024 2nd International Conference on Advancement in Computation & Computer Technologies (InCACCT), Gharuan, India, 2024, pp. 1–6.  
+[DOI: 10.1109/InCACCT61598.2024.10551257](https://doi.org/10.1109/InCACCT61598.2024.10551257)
+
+```bibtex
+@inproceedings{mishra2024image,
+  author    = {S. Mishra and others},
+  title     = {Image Caption Generation using Vision Transformer and GPT Architecture},
+  booktitle = {2024 2nd International Conference on Advancement in Computation & Computer Technologies (InCACCT)},
+  year      = {2024},
+  pages     = {1--6},
+  doi       = {10.1109/InCACCT61598.2024.10551257},
+  keywords  = {Image Captioning, Vision Transformer, GPT-2, Encoder-Decoder}
+}
+
 ## Future Work
 - Support for **Visual Genome** and **LAION-5B** datasets.
 - Fine-tuning with **self-supervised learning**.
