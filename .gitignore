@@ -176,3 +176,5 @@ data
 runs/
 state_dict.pt
 datasets/
+uploads/
+debug_*
