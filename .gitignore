@@ -172,9 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-data
+
+
+dataset/
+flickr30k/
 runs/
-state_dict.pt
-datasets/
-uploads/
-debug_*
+*.pt
