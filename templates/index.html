@@ -3,94 +3,75 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Captioning</title>
+    <title>AI Image Captioning</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Image Captioning</h1>
-            <p>Upload an image and get an AI-generated caption</p>
+            <h1>AI Image Captioning</h1>
+            <p>Upload an image to see how AI describes it.</p>
         </header>
         
         <main>
-            <div class="upload-section">
-                <div id="drop-area" class="drop-area">
-                    <div class="drop-message">
-                        <i class="fas fa-cloud-upload-alt"></i>
-                        <p>Drag and drop your image here</p>
-                        <p>or</p>
-                        <label for="file-upload" class="file-upload-btn">Choose a file</label>
-                        <input type="file" id="file-upload" accept="image/*" hidden>
-                    </div>
-                    <div id="preview-container" class="preview-container hidden">
-                        <img id="image-preview" src="#" alt="Preview">
-                        <button id="remove-image" class="remove-btn">
-                            <i class="fas fa-times"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="parameters-section">
-                <h2>Generation Parameters</h2>
-                
-                <div class="parameter">
-                    <label for="temperature">Temperature: <span id="temperature-value">1.0</span></label>
-                    <input type="range" id="temperature" name="temperature" min="0.1" max="2.0" step="0.1" value="1.0">
-                    <div class="parameter-description">
-                        <p>Controls randomness: Lower values make output more focused and deterministic</p>
-                    </div>
-                </div>
-                
-                <div class="parameter">
-                    <label for="top-p">Top-p (Nucleus Sampling): <span id="top-p-value">0.9</span></label>
-                    <input type="range" id="top-p" name="top-p" min="0.1" max="1.0" step="0.05" value="0.9">
-                    <div class="parameter-description">
-                        <p>Considers the smallest set of tokens whose cumulative probability exceeds p</p>
-                    </div>
-                </div>
-                
-                <div class="parameter">
-                    <label for="top-k">Top-k: <span id="top-k-value">50</span></label>
-                    <input type="range" id="top-k" name="top-k" min="1" max="100" step="1" value="50">
-                    <div class="parameter-description">
-                        <p>Limits sampling to the k most likely next tokens</p>
-                    </div>
-                </div>
-                
-                <button id="generate-btn" class="generate-btn" disabled>Generate Caption</button>
-            </div>
-            
-            <div id="result-section" class="result-section hidden">
-                <h2>Generated Caption</h2>
-                <div class="result-display">
-                    <div class="result-image-container">
-                        <img id="result-image" src="#" alt="Uploaded image">
-                    </div>
-                    <div class="caption-container">
-                        <p id="caption-text"></p>
-                        <div class="used-parameters">
-                            <p><strong>Temperature:</strong> <span id="used-temperature"></span></p>
-                            <p><strong>Top-p:</strong> <span id="used-top-p"></span></p>
-                            <p><strong>Top-k:</strong> <span id="used-top-k"></span></p>
+            <div class="card">
+                <div class="upload-section">
+                    <div id="drop-area" class="drop-area">
+                        <div class="drop-content">
+                            <i class="fas fa-cloud-upload-alt upload-icon"></i>
+                            <h3>Upload your image</h3>
+                            <p>Drag and drop or browse to choose a file</p>
+                            <label for="file-upload" class="file-upload-btn">Browse Files</label>
+                            <input type="file" id="file-upload" accept="image/*" hidden>
+                        </div>
+                        <div id="preview-container" class="preview-container hidden">
+                            <img id="image-preview" src="#" alt="Preview">
+                            <button id="remove-image" class="remove-btn" title="Remove image">
+                                <i class="fas fa-times"></i>
+                            </button>
                         </div>
                     </div>
                 </div>
+                
+                <div class="controls-section">
+                    <div class="parameter-control">
+                        <div class="parameter-header">
+                            <label for="temperature">Creativity (Temperature)</label>
+                            <span id="temperature-value">0.5</span>
+                        </div>
+                        <input type="range" id="temperature" name="temperature" min="0.1" max="1.5" step="0.1" value="0.5">
+                        <div class="parameter-hint">Lower values are more factual, higher values are more creative.</div>
+                    </div>
+                    
+                    <button id="generate-btn" class="generate-btn" disabled>
+                        <span>Generate Caption</span>
+                        <i class="fas fa-magic"></i>
+                    </button>
+                </div>
             </div>
             
-            <div id="loading" class="loading hidden">
-                <div class="spinner"></div>
-                <p>Generating caption...</p>
+            <div id="result-section" class="result-section hidden">
+                <div class="result-card">
+                    <h2>Generated Caption</h2>
+                    <div class="caption-box">
+                        <p id="caption-text"></p>
+                    </div>
+                </div>
             </div>
         </main>
         
         <footer>
-            <p>Powered by PyTorch & Flask</p>
+            <p>Built with PyTorch & Flask</p>
         </footer>
     </div>
     
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <p>Analyzing image...</p>
+    </div>
+
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>
 </body>
 </html>
