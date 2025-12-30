@@ -17,7 +17,7 @@ class AttentionBlock(nn.Module):
             hidden_size, 
             num_heads=num_heads, 
             batch_first=True, 
-            dropout=dropout # Fixed parameter name
+            dropout=dropout
         )
 
     def forward(self, x_in, kv_in, key_mask=None):
@@ -72,14 +72,14 @@ class TransformerBlock(nn.Module):
         x = self.attn1(x, x, key_mask=input_key_mask)
         x = x + res
 
-        # Cross-Attention with pre-norm
+        # Cross-Attention W/ pre-norm
         if self.decoder and kv_cross is not None:
             res = x
             x = self.norm2(x)
             x = self.attn2(x, kv_cross, key_mask=cross_key_mask)
             x = x + res
 
-        # Feed Forward with pre-norm
+        # Feed Forward W/ pre-norm
         res = x
         x = self.norm_mlp(x)
         x = self.mlp(x)
