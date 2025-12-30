@@ -6,9 +6,6 @@ from torch.utils.data import Dataset
 
 from transformers import AutoTokenizer
 
-from vision.tokenizer.vocab import Vocabulary
-
-
 
 
 class FlickrDataset(Dataset):
