@@ -4,17 +4,23 @@ import torch.nn as nn
 from vision.model.attention import TransformerBlock
 
 def extract_patches(image_tensor, patch_size=16):
+    '''
+    Extracts non-overlapping patches from the input image tensor.
+    Args:
+        image_tensor (torch.Tensor): Input image tensor of shape (BS, C, H, W).
+        patch_size (int): Size of each square patch.
+    Returns:
+        torch.Tensor: Tensor of shape (BS, L, H) where L is the number of patches
+                      and H is the flattened patch size (C * patch_size * patch_size).
+    '''
     # Get the dimensions of the image tensor
-    bs, c, h, w = image_tensor.size()
+    bs, c, _, _ = image_tensor.size()
     
     # Define the Unfold layer with appropriate parameters
     unfold = torch.nn.Unfold(kernel_size=patch_size, stride=patch_size)
-    
-    # Apply Unfold to the image tensor
     unfolded = unfold(image_tensor)
     
     # Reshape the unfolded tensor to match the desired output shape
-    # Output shape: BSxLxH, where L is the number of patches in each dimension
     unfolded = unfolded.transpose(1, 2).reshape(bs, -1, c * patch_size * patch_size)
     
     return unfolded
@@ -23,6 +29,21 @@ def extract_patches(image_tensor, patch_size=16):
 class VisionEncoder(nn.Module):
     def __init__(self, image_size, channels_in, patch_size=16, hidden_size=128, 
                  num_layers=3, num_heads=4, mlp_dropout=0.1, att_dropout=0.1):
+        '''
+        Vision Transformer Encoder that processes images by dividing them into patches
+        and passing them through transformer blocks.
+        Args:
+            image_size (int): Height and width of the input images (assumed square).
+            channels_in (int): Number of input channels (e.g., 3 for RGB).
+            patch_size (int): Size of each square patch.
+            hidden_size (int): Dimensionality of input and output features.
+            num_layers (int): Number of transformer blocks.
+            num_heads (int): Number of attention heads.
+            mlp_dropout (float): Dropout rate for the feed-forward network.
+            att_dropout (float): Dropout rate for attention layers.
+        Returns:
+            torch.Tensor: Encoded image features of shape (batch_size, num_patches, hidden_size).
+        '''
         super(VisionEncoder, self).__init__()
         
         self.patch_size = patch_size

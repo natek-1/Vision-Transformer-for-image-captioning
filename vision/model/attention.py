@@ -10,6 +10,8 @@ class AttentionBlock(nn.Module):
             num_heads (int): Number of attention heads.
             masking (bool): If True, applies causal masking (for decoder).
             dropout (float): Dropout rate for attention weights.
+        Returns:
+            torch.Tensor: Output tensor of the same shape as input.
         '''
         super(AttentionBlock, self).__init__()
         self.masking = masking
@@ -25,8 +27,7 @@ class AttentionBlock(nn.Module):
         if self.masking:
             # Query length x Key length
             q_len = x_in.size(1)
-            k_len = kv_in.size(1)
-            mask = torch.triu(torch.ones(q_len, k_len, device=x_in.device), 1).bool()
+            mask = torch.triu(torch.ones(q_len, q_len, device=x_in.device), 1).bool()
             
         # Returns (output, weights) - we take [0]
         return self.multihead_attn(x_in, kv_in, kv_in, attn_mask=mask, 
@@ -44,6 +45,8 @@ class TransformerBlock(nn.Module):
             masking (bool): If True, applies causal masking in self-attention.
             mlp_dropout (float): Dropout rate for the feed-forward network.
             att_dropout (float): Dropout rate for attention layers.
+        Returns:
+            torch.Tensor: Output tensor of the same shape as input.
         '''
         super(TransformerBlock, self).__init__()
         self.decoder = decoder
