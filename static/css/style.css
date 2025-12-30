@@ -49,6 +49,19 @@ header p {
     font-size: 1.1rem;
 }
 
+.header-content {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.app-logo {
+    width: 50px;
+    height: auto;
+}
+
 .card {
     background: var(--card-background);
     border-radius: 1rem;

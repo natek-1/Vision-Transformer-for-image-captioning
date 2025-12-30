@@ -19,7 +19,7 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # --- Model & Config ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CHECKPOINT_PATH = "model_weights.pt" 
+CHECKPOINT_PATH = "checkpoint.pt" 
 
 # Hyperparameters (must match training)
 IMAGE_SIZE = 128
@@ -42,24 +42,19 @@ model.to(DEVICE)
 if os.path.exists(CHECKPOINT_PATH):
     print(f"Loading weights from {CHECKPOINT_PATH}...")
     try:
-        # The main.py saves state_dict directly to model_weights.pt in some cases
-        # or it saves a full checkpoint dict to checkpoints/model_checkpoint.pt
-        # The user file list shows 'model_weights.pt', let's assume it's the state dict.
-        # But wait, main.py says: torch.save(model.state_dict(), "model_weights.pt")
-        # So it is just the state dict.
-        state_dict = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+        state_dict = torch.load(CHECKPOINT_PATH, map_location=DEVICE, weights_only=False)
         model.load_state_dict(state_dict)
         print("Model loaded successfully.")
     except Exception as e:
         print(f"Error loading model: {e}")
-        # As a fallback, try loading as a checkpoint dictionary if the above fails
+        # Fallback
         try:
-           checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+           checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE, weights_only=False)
            if 'model_state_dict' in checkpoint:
                model.load_state_dict(checkpoint['model_state_dict'])
                print("Model loaded from checkpoint dict successfully.")
-        except:
-           print("Fatal error loading model.")
+        except Exception as e:
+           print("Fatal error loading model.", e)
 else:
     print(f"Warning: {CHECKPOINT_PATH} not found. Running with random weights.")
 

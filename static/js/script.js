@@ -126,7 +126,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Allow clicking on drop area to select file (if not clicking remove button)
+    // Allow clicking on drop area to select file (if not clicking remove button or the label)
     dropArea.addEventListener('click', (e) => {
+        // The label with 'for' attribute already triggers the input, so we avoid double-triggering
+        if (e.target.closest('.file-upload-btn') || e.target ===  fileInput) {
+            return;
+        }
+        
         if (e.target !== removeBtn && !removeBtn.contains(e.target)) {
             fileInput.click();
         }
