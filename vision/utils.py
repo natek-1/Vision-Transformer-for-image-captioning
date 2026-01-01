@@ -71,7 +71,7 @@ def custom_collate_fn(batch):
         'attention_mask': torch.stack(attention_mask, dim=0)
     }
     
-def save_checkpoint(epoch, model, optimizer, scaler, best_val_loss, 
+def save_checkpoint(epoch, model, optimizer, best_val_loss, 
                    train_losses, val_losses, meteor_scores, bleu_scores,
                    train_epoch_loss, val_epoch_loss, checkpoint_path):
     """Save training checkpoint"""
@@ -79,7 +79,6 @@ def save_checkpoint(epoch, model, optimizer, scaler, best_val_loss,
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'scaler_state_dict': scaler.state_dict(),
         'best_val_loss': best_val_loss,
         'train_losses': train_losses,
         'val_losses': val_losses,

@@ -1,3 +1,4 @@
+import logging
 import random
 
 from tqdm  import tqdm
@@ -8,192 +9,141 @@ from nltk.translate.meteor_score import meteor_score
 
 import torch
 
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler("training.log")])
 
-
-def corpus_meteor(expected, predicted):
-    meteor_score_sentences_list = list()
-    [meteor_score_sentences_list.append(meteor_score(expect, predict)) for expect, predict in zip(expected, predicted)]
-    meteor_score_res = np.mean(meteor_score_sentences_list)
+def calculate_corpus_meteor(references, hypotheses):
+    '''
+    Calculate the corpus-level METEOR score.
+    Args:
+        references (list): List of lists of reference sentences
+        hypotheses (list): List of predicted sentences
+    Returns:
+        float: Corpus-level METEOR score
+    '''
+    assert len(hypotheses) == len(references) , "The number of predicted and expected sentences must be the same."
+    scores = []
+    for hyp, refs in zip(hypotheses, references):
+        hyp_tokens = hyp.lower().split()
+        ref_tokens_list = [ref.lower().split() for ref in refs]
+        score = meteor_score(ref_tokens_list, hyp_tokens)
+        scores.append(score)
+    meteor_score_res = np.mean(scores)
     return meteor_score_res
 
+def calculate_corpus_bleu(references, hypotheses, weight=(0.25, 0.25, 0.25, 0.25)):
+    """Calculate the corpus-level BLEU score.
 
-# Function to compute loss while ignoring padding tokens
-def compute_loss(logits, labels, mask, loss_fct):
-    """
-    Compute cross entropy loss while ignoring padding tokens.
-    
     Args:
-        logits: Output from model, shape [batch_size, seq_len, vocab_size]
-        labels: Target token ids, shape [batch_size, seq_len]
-        attention_mask: Mask indicating valid tokens, shape [batch_size, seq_len]
-    
+        references (list): List of lists of reference sentences
+        hypotheses (list): List of predicted sentences
+        weight (tuple): Weights for n-gram precision
     Returns:
-        Loss value
+        float: Corpus-level BLEU score
     """
-    # shape: [batch_size * (seq_len)]
-    losses = loss_fct(
-        logits.view(-1, logits.size(-1)),
-        labels.view(-1)
-    )
-    
-    # Apply the mask to get losses only for non-padding tokens
-    # shape: [batch_size * (seq_len)]
-    masked_losses = losses * mask.view(-1)
-    
-    # Get the sum of losses and divide by number of non-padding tokens
-    loss = masked_losses.sum() / mask.sum()
-    
-    return loss
+    assert len(hypotheses) == len(references) , "The number of predicted and expected sentences must be the same."
+    #shape: [n_samples, n_tokens]
+    hyp_tokens = [hyp.lower().split() for hyp in hypotheses]
+    #shape: [n_samples, 5, n_tokens]
+    ref_tokens = [[ref.lower().split() for ref in refs] for refs in references]
+    return corpus_bleu(ref_tokens, hyp_tokens, weights=weight)
 
-def train_epoch(train_loader, model, device, criterion, optimizer, epoch, writer, global_step,
-                teacher_force = False, teacher_forcing_ratio_start=0.8, teacher_forcing_ratio_end=0, epochs=5, vocab_size=50257):
-    losses = []
 
-    model.train()
-    # Calculate teacher forcing ratio for this epoch (linearly decrease)
-    teacher_forcing_ratio = teacher_forcing_ratio_start - (epoch / (epochs - 1)) * \
-                            (teacher_forcing_ratio_start - teacher_forcing_ratio_end)
-                            
-    batch_iterator = tqdm(enumerate(train_loader),total=len(train_loader) , desc=f"Training Processing Epoch: {epoch:02d}", leave=False)
-    for idx, (imgs, caps, att_mask) in batch_iterator:
-        # move tensor to device if available
-        imgs = imgs.to(device)
-        caps = caps.to(device)
-        att_mask = att_mask.to(device)
 
+def train_epoch(caption_model, train_loader, optimizer, device, loss_fn, td):
+    caption_model.train()
+    epoch_loss = []
+    batch_iterator = tqdm(train_loader, desc="Training", leave=False)
+    for batch in batch_iterator:
+        random_index = random.randint(0, batch['input_ids'].size(1) - 1)
+        images = batch['pixel_values'].to(device)
+        captions = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        
+        # Shift the captions to create input and target sequences
+        input_captions = captions[:,random_index,:-1]
+        target_captions = captions[:,random_index, 1:].contiguous()
+
+        # Apply token dropping for regularization
+        input_captions = td(input_captions)
+        outputs = caption_model(input_image=images, 
+                                target_seq=input_captions, 
+                                padding_mask=attention_mask[:,random_index,:-1])
+        # Compute the loss
+        loss = loss_fn(outputs.view(-1, outputs.size(-1)), 
+                        target_captions.view(-1))
+        
+        # Backpropagation and optimization step
         optimizer.zero_grad()
-
-        # forward prop
-        if teacher_force:
-            predictions = model(imgs, caps[:,:-1], att_mask[:,:-1])
-        else:
-            encoder_output = model.vit(imgs).pooler_output # (batch_size, embed_dim)
-            predictions = torch.zeros(caps.shape[0], caps.shape[1], vocab_size, device=imgs.device)
-            start_output = torch.tensor([[]]*imgs.shape[0], device=imgs.device, dtype=torch.long) # batch_size, 1
-            start_att = torch.tensor([[]]*imgs.shape[0], device=imgs.device, dtype=torch.long) # batch_size, 1
-            
-            for t in range(caps.shape[1]):
-                logits = model.gpt2(start_output, encoder_output, start_att)[:,-1,:] # (batch_size, vocab_size)
-                predictions[:, t] = logits.squeeze(1)
-                use_teacher_forcing = random.random() < teacher_forcing_ratio
-                
-                if use_teacher_forcing:
-                    start_output = torch.cat([start_output, caps[:, t].unsqueeze(1)], dim=1)
-                    start_att = torch.cat([start_att, att_mask[:,t].unsqueeze(1)], dim=1)
-                else:
-                    new_token_mask = torch.ones((imgs.shape[0], 1), dtype=torch.long, device=imgs.device)
-                    for i in range(imgs.shape[0]):
-                        if logits[i].argmax(-1).item() == vocab_size-1:
-                            new_token_mask[i, 0] = 0
-                    start_output = torch.cat([start_output, logits.argmax(dim=-1, keepdim=True)], dim=1)
-                    start_att = torch.cat([start_att, new_token_mask], dim=1)
-
-
-        loss = compute_loss(predictions, caps, start_att, criterion)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
         optimizer.step()
         
-        batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
-        writer.add_scalar("Training loss", loss.item(), global_step=global_step)
-        global_step += 1
-
-        # keep track of metrics
-        losses.append(loss.item())
-        break
-        
-
-    print('Training Epoch #: [{0}]\t'
-        'Loss: {loss:.4f}\t'.format(
-                epoch, loss=np.mean(losses)))
-
-    return global_step
+        epoch_loss.append(loss.item())
+        batch_iterator.set_postfix(loss=loss.item())
+    
+    return epoch_loss
 
 
-
-def val_epoch(model, device, validation_loader, vocabulary, criterion, global_step, writer, epoch, num_examples=3):
-    model.eval()
+def val_epoch(model, val_loader, device, loss_fn, epoch, tokenizer, num_examples=5):
     epoch_loss = []
     references = []
     hypotheses = []
-    alt_hyp = []
+    model.eval()
     with torch.inference_mode():
-        batch_iterator = tqdm(enumerate(validation_loader),total=len(validation_loader) ,desc=f"Evaluation Processing Epoch: {epoch:02d}", leave=False)
-        for idx, (images, captions, att_mask) in batch_iterator:
-            images = images.to(device)
-            captions = captions.to(device)
-            att_mask = att_mask.to(device)
+        batch_iterator = tqdm(enumerate(val_loader),total=len(val_loader) ,desc=f"Evaluation Processing Epoch: {epoch:02d}", leave=False)
+        for idx, batch in batch_iterator:
+            images, captions = batch['pixel_values'].to(device), batch['input_ids'].to(device)
+            attention_masks = batch['attention_mask'].to(device)
 
-            # forward prop
-            sample_caption = captions[:,0,:].clone()
-            sample_att_mask = att_mask[:,0,:].clone()
-            
-            encoder_output = model.vit(images).pooler_output # (batch_size, embed_dim)
-            predictions = torch.zeros(sample_caption.shape[0], sample_caption.shape[1], vocabulary.vocab_size(), device=images.device)
-            start_output = torch.tensor([[]]*images.shape[0], device=images.device, dtype=torch.long) # batch_size, 1
-            start_att = torch.tensor([[]]*images.shape[0], device=images.device, dtype=torch.long) # batch_size, 1
-            
-            for t in range(sample_caption.shape[1]):
-                logits = model.gpt2(start_output, encoder_output, start_att)[:,-1,:] # (batch_size, vocab_size)
-                predictions[:, t] = logits.squeeze(1)
-                new_token_mask = torch.ones((images.shape[0], 1), dtype=torch.long, device=images.device)
-                for i in range(images.shape[0]):
-                    if logits[i].argmax(-1).item() == vocabulary.vocab_size()-1:
-                        new_token_mask[i, 0] = 0
-                start_output = torch.cat([start_output, logits.argmax(dim=-1, keepdim=True)], dim=1)
-                start_att = torch.cat([start_att, new_token_mask], dim=1)
+            # Shift the target sequence to the right by one position
+            sample_caption = captions[:,0,:-1].clone()
+            sample_att_mask = attention_masks[:,0,:-1].clone()
+            target_captions = captions[:,0, 1:].clone().contiguous()
+            mask = attention_masks[:,0,1:].clone()
 
-            loss = compute_loss(predictions, sample_caption, start_att, criterion)
+            # Forward pass through the model
+            outputs = model(input_image=images, target_seq=sample_caption, 
+                            padding_mask=sample_att_mask)
 
-            # keep track of metrics
+            # Compute the loss
+            loss = loss_fn(outputs.view(-1, outputs.size(-1)), 
+                           target_captions.view(-1))
+            #loss = (loss * mask).mean()
             epoch_loss.append(loss.item())
-            batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
-            writer.add_scalar("Validation loss", loss.item(), global_step=global_step)
-            global_step += 1
-            # gather all references and hypothesis for blue and meteor score calculations
-            # references
-            for i in range(captions.shape[0]): #looping over the batch dimension
-                caps = []
-                for j in range(captions.shape[1]):
-                    caps.append(vocabulary.decode(captions[i,j].tolist()).split())
-                references.append(caps)
+            batch_iterator.set_postfix(loss=loss.item())
             
-            # Hypothesis
-            predictions = predictions.argmax(dim=-1).tolsit()
-            for prediction in predictions:
-                hypotheses.append(vocabulary.decode(prediction).split())
-            
-                
+            # raw predictions
+            predictions = model.generate(input_image=images, 
+                                sos_token=tokenizer.cls_token_id,
+                                eos_token=tokenizer.sep_token_id, 
+                                pad_token=tokenizer.pad_token_id, 
+                                max_length=90, temp=0.0)
+            # Gather references and hypotheses for metric calculation
+            hypotheses.extend([tokenizer.decode(predictions[i], skip_special_tokens=True) for i in range(predictions.size(0))])
+            for i in range(captions.size(0)):
+                ref_captions = []
+                for ref_id in captions[i].tolist():
+                    ref_caption = tokenizer.decode(ref_id, skip_special_tokens=True)
+                    ref_captions.append(ref_caption)
+                references.append(ref_captions) # [32, 5]
+
         #print samples
         index = random.sample([i for i in range(len(hypotheses))], num_examples)
+        logging.info(f"\n--- Epoch {epoch}, Sample {num_examples} Predictions vs References ---\n")
         for idx in index:
-            print("Here is the model prediction")
-            print(hypotheses[idx])
-            print("-"*100)
-            print("Here are what the references look like")
+            logging.info("\nModel Prediction:")
+            logging.info(hypotheses[idx])
+            logging.info("\nData References:")
             for i in range(5):
-                print(references[idx][i])
-            print("-"*100)
+                logging.info(references[idx][i])
+        logging.info(str("-" * 100))
+        
+        # Calculate BLEU and METEOR scores
+        bleu_1 = calculate_corpus_bleu(references, hypotheses, weight=(1, 0, 0, 0))
+        bleu_2 = calculate_corpus_bleu(references, hypotheses, weight=(0.5, 0.5, 0, 0))
+        bleu_3 = calculate_corpus_bleu(references, hypotheses, weight=(0.33, 0.33, 0.33, 0))
+        bleu_4 = calculate_corpus_bleu(references, hypotheses)
+        meteor = calculate_corpus_meteor(references, hypotheses)
 
-        bleu_1 = corpus_bleu(references, hypotheses, weights=(1, 0, 0, 0))
-        bleu_2 = corpus_bleu(references, hypotheses, weights=(0.5, 0.5, 0, 0))
-        bleu_3 = corpus_bleu(references, hypotheses, weights=(0.33, 0.33, 0.33, 0))
-        bleu_4 = corpus_bleu(references, hypotheses)
-        meteor = corpus_meteor(references, hypotheses)
-        
-        writer.add_scalar('val_bleu1', bleu_1, epoch)
-        writer.add_scalar('val_bleu2', bleu_2, epoch)
-        writer.add_scalar('val_bleu3', bleu_3, epoch)
-        writer.add_scalar('val_bleu4', bleu_4, epoch)
-        writer.add_scalar('val_loss', np.mean(epoch_loss), epoch)
-        writer.add_scalar('val_meteor', meteor, epoch)
-        
-        print(f'''Validation Epoch: {epoch}
-              Val Loss: {np.mean(epoch_loss)}
-              BLEU-1: {bleu_1}
-              BLEU-2: {bleu_2}
-              BLEU-3: {bleu_3}
-              BLEU-4: {bleu_4}
-              Meteor: {meteor}''')
-    
-    return bleu_4, global_step, np.mean(epoch_loss)
+    return epoch_loss, bleu_1, bleu_2, bleu_3, bleu_4, meteor
