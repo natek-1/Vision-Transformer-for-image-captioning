@@ -1,7 +1,7 @@
 import logging
 import random
 
-from tqdm  import tqdm
+from tqdm import tqdm
 import numpy as np
 
 from nltk.translate.bleu_score import corpus_bleu
@@ -22,7 +22,7 @@ def calculate_corpus_meteor(references, hypotheses):
     Returns:
         float: Corpus-level METEOR score
     '''
-    assert len(hypotheses) == len(references) , "The number of predicted and expected sentences must be the same."
+    assert len(hypotheses) == len(references), "The number of predicted and expected sentences must be the same."
     scores = []
     for hyp, refs in zip(hypotheses, references):
         hyp_tokens = hyp.lower().split()
@@ -42,7 +42,7 @@ def calculate_corpus_bleu(references, hypotheses, weight=(0.25, 0.25, 0.25, 0.25
     Returns:
         float: Corpus-level BLEU score
     """
-    assert len(hypotheses) == len(references) , "The number of predicted and expected sentences must be the same."
+    assert len(hypotheses) == len(references), "The number of predicted and expected sentences must be the same."
     #shape: [n_samples, n_tokens]
     hyp_tokens = [hyp.lower().split() for hyp in hypotheses]
     #shape: [n_samples, 5, n_tokens]
@@ -50,8 +50,7 @@ def calculate_corpus_bleu(references, hypotheses, weight=(0.25, 0.25, 0.25, 0.25
     return corpus_bleu(ref_tokens, hyp_tokens, weights=weight)
 
 
-
-def train_epoch(caption_model, train_loader, optimizer, device, loss_fn, td):
+def train_epoch(caption_model, train_loader, optimizer, device, loss_fn, td, scheduler=None):
     caption_model.train()
     epoch_loss = []
     batch_iterator = tqdm(train_loader, desc="Training", leave=False)
@@ -62,14 +61,14 @@ def train_epoch(caption_model, train_loader, optimizer, device, loss_fn, td):
         attention_mask = batch['attention_mask'].to(device)
         
         # Shift the captions to create input and target sequences
-        input_captions = captions[:,random_index,:-1]
-        target_captions = captions[:,random_index, 1:].contiguous()
+        input_captions = captions[:, random_index, :-1]
+        target_captions = captions[:, random_index, 1:].contiguous()
 
         # Apply token dropping for regularization
         input_captions = td(input_captions)
         outputs = caption_model(input_image=images, 
                                 target_seq=input_captions, 
-                                padding_mask=attention_mask[:,random_index,:-1])
+                                padding_mask=attention_mask[:, random_index, :-1])
         # Compute the loss
         loss = loss_fn(outputs.view(-1, outputs.size(-1)), 
                         target_captions.view(-1))
@@ -77,7 +76,15 @@ def train_epoch(caption_model, train_loader, optimizer, device, loss_fn, td):
         # Backpropagation and optimization step
         optimizer.zero_grad()
         loss.backward()
+        
+        # Gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(caption_model.parameters(), max_norm=1.0)
+        
         optimizer.step()
+        
+        # Step scheduler if it's a batch-level scheduler (OneCycleLR)
+        if scheduler is not None and hasattr(scheduler, 'step') and not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step()
         
         epoch_loss.append(loss.item())
         batch_iterator.set_postfix(loss=loss.item())
@@ -91,16 +98,16 @@ def val_epoch(model, val_loader, device, loss_fn, epoch, tokenizer, num_examples
     hypotheses = []
     model.eval()
     with torch.inference_mode():
-        batch_iterator = tqdm(enumerate(val_loader),total=len(val_loader) ,desc=f"Evaluation Processing Epoch: {epoch:02d}", leave=False)
+        batch_iterator = tqdm(enumerate(val_loader), total=len(val_loader),
+                             desc=f"Evaluation Processing Epoch: {epoch:02d}", leave=False)
         for idx, batch in batch_iterator:
             images, captions = batch['pixel_values'].to(device), batch['input_ids'].to(device)
             attention_masks = batch['attention_mask'].to(device)
 
             # Shift the target sequence to the right by one position
-            sample_caption = captions[:,0,:-1].clone()
-            sample_att_mask = attention_masks[:,0,:-1].clone()
-            target_captions = captions[:,0, 1:].clone().contiguous()
-            mask = attention_masks[:,0,1:].clone()
+            sample_caption = captions[:, 0, :-1].clone()
+            sample_att_mask = attention_masks[:, 0, :-1].clone()
+            target_captions = captions[:, 0, 1:].clone().contiguous()
 
             # Forward pass through the model
             outputs = model(input_image=images, target_seq=sample_caption, 
@@ -129,15 +136,16 @@ def val_epoch(model, val_loader, device, loss_fn, epoch, tokenizer, num_examples
                 references.append(ref_captions) # [32, 5]
 
         #print samples
-        index = random.sample([i for i in range(len(hypotheses))], num_examples)
-        logging.info(f"\n--- Epoch {epoch}, Sample {num_examples} Predictions vs References ---\n")
-        for idx in index:
-            logging.info("\nModel Prediction:")
-            logging.info(hypotheses[idx])
-            logging.info("\nData References:")
-            for i in range(5):
-                logging.info(references[idx][i])
-        logging.info(str("-" * 100))
+        if len(hypotheses) > 0:
+            indices = random.sample(range(len(hypotheses)), num_examples)
+            logging.info(f"\n--- Epoch {epoch}, Sample {num_examples} Predictions vs References ---\n")
+            for idx in indices:
+                logging.info("\nModel Prediction:")
+                logging.info(hypotheses[idx])
+                logging.info("\nData References:")
+                for i in range(5):
+                    logging.info(references[idx][i])
+            logging.info(str("-" * 100))
         
         # Calculate BLEU and METEOR scores
         bleu_1 = calculate_corpus_bleu(references, hypotheses, weight=(1, 0, 0, 0))
