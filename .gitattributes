@@ -1,2 +1,2 @@
 *.ipynb linguist-generated
-templates/** linguist-detectable=false
+*.html linguist-detectable=false
