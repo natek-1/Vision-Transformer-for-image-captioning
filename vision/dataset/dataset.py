@@ -1,45 +1,32 @@
-import os
-from PIL import Image
+from typing import List
+import random
 
 import torch
-from torch.utils.data import Dataset
+import torch.nn as nn
 
-from transformers import AutoTokenizer
+from vision.model.tokenizer import TOKENIZER
 
 
 
-class FlickrDataset(Dataset):
-    max_len = 90
-    def __init__(self, root_dir, data_dict, transform=None):
-        self.root_dir = root_dir
-        self.data_dict = data_dict
-        self.transform = transform
-
-        # get the image and caption
-        self.item = self.setup_item()
-
-        self.tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+class SampleCaption(nn.Module):
+    def __init__(self, training=True):
+        self.training = training
+    def __call__(self, sample):
+        rand_index = random.randint(0, len(sample) - 1)
+        #print(sample)
+        return sample[rand_index] if self.training else sample[:5]
     
-    def __len__(self):
-        return len(self.item)
-    
-    def setup_item(self):
-        item = []
-        for image_id, image_captions in self.data_dict.items():
-            item.append((image_id, image_captions))
-        return item
 
 
-    def __getitem__(self, index):
-        # get image
-        image_path = os.path.join(self.root_dir, self.item[index][0]) # path to image
-        img = Image.open(image_path).convert('RGB')
+def custom_collate_fn(batch: List, tokenizer = TOKENIZER, train: bool =True):
+    images = []
+    captions = []
 
-        if self.transform is not None:
-            img = self.transform(img)
-        
-        # get caption
-        caption = self.item[index][1] # list of relevant caption
-        num_caption = self.tokenizer(caption, add_special_tokens=True, max_length=FlickrDataset.max_len, padding='max_length', truncation=True,
-                                    return_tensors="pt")
-        return img, num_caption
+    for entry in batch:
+        images.append(entry[0])
+        captions.append(entry[1])
+
+    sample_captions = captions if train else [caption[0] for caption in captions]
+    token_ids = tokenizer(sample_captions, padding=True, return_tensors='pt')  
+    images = torch.stack(images, dim=0)
+    return images, token_ids['input_ids'], token_ids['attention_mask'], captions

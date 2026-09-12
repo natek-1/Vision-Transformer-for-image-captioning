@@ -14,13 +14,15 @@ from tqdm import trange
 import torch
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
+import torchvision.datasets as datasets
 
-from transformers import AutoTokenizer
+from transformers import ViTImageProcessor
 
-from vision.dataset.dataset import FlickrDataset
+from vision.dataset.dataset import SampleCaption, custom_collate_fn
 from vision.train.train import train_epoch, val_epoch 
 from vision.model.caption import VisionEncoderDecoder, TokenDrop
-from vision.utils import train_val_split, custom_collate_fn, save_checkpoint, create_visualizations
+from vision.model.tokenizer import TOKENIZER
+from vision.utils import save_checkpoint, create_visualizations, set_seed, get_scheduler
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -30,17 +32,16 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 torch.backends.cuda.matmul.allow_tf32 = True
 
 # Define hyperparameters
-LEARNING_RATE = 6e-4 #2e-4 # after current experiment try to start with 6e-4
-IMAGE_SIZE = 128
-NEPOCHS = 130
-BATCH_SIZE = 128
-HIDDEN_SIZE = 256
-NUM_LAYERS = (6, 6)
+LEARNING_RATE = 1e-4 #2e-4 # after current experiment try to start with 6e-4
+IMAGE_SIZE = 224
+NEPOCHS = 50
+BATCH_SIZE = 256
+HIDDEN_SIZE = 512
+NUM_LAYERS = 12
 NUM_HEADS = 8
-PATCH_SIZE = 8
 
 # Learning rate scheduler configuration
-SCHEDULER_TYPE = "cosine"  # Options: "cosine", "cosine_warmup", "step", "plateau", "onecycle", "noam", None
+SCHEDULER_TYPE = None  # Options: "cosine", "cosine_warmup", "step", "plateau", "onecycle", "noam", None
 WARMUP_EPOCHS = 5
 MIN_LR = 2e-5 # 6e-6 # after current experiment try to start with 6e-5
 
@@ -49,134 +50,109 @@ RESUME_TRAINING = False  # Set to True to resume from checkpoint
 CHECKPOINT_PATH = "checkpoints/model_checkpoint.pt"
 CHECKPOINT_DIR = "checkpoints"
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-folder = "flickr30k/Images/"
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-df = pd.read_csv("flickr30k/captions.txt")
-caption_dict = defaultdict(list)
-for _, row in df.iterrows():
-    caption_dict[row.image].append(row.caption)
-train_data, val_data = train_val_split(caption_dict)
+PROCESSOR = ViTImageProcessor.from_pretrained('google/vit-large-patch16-224-in21k')
+tokenizer = TOKENIZER
+set_seed(42)
+
+import os, shutil, pathlib
+  
+def stage_to_local(src_dir, local_root="/tmp", subdir="coco_cache"):
+    """Copy an image directory to fast node-local disk once; return the local path.
+    Falls back to the original NFS path if local staging isn't possible."""
+    src = pathlib.Path(src_dir).resolve()
+    if not src.is_dir():
+        raise FileNotFoundError(f"source dir not found: {src}")
+
+    # unique per-user destination on local disk
+    dest_base = pathlib.Path(local_root) / f"{os.environ.get('USER','user')}_{subdir}"
+    dest = dest_base / src.name
+
+    try:
+        if dest.is_dir():
+            # already staged if counts match; otherwise re-copy
+            n_src = sum(1 for _ in src.iterdir())
+            n_dst = sum(1 for _ in dest.iterdir())
+            if n_dst >= n_src:
+                print(f"[stage] using cached {dest} ({n_dst} entries)")
+                return str(dest)
+            print(f"[stage] incomplete cache ({n_dst}/{n_src}), re-copying")
+            shutil.rmtree(dest, ignore_errors=True)
+
+        dest_base.mkdir(parents=True, exist_ok=True)
+        print(f"[stage] copying {src} -> {dest} (one-time)...")
+        shutil.copytree(src, dest)
+        print(f"[stage] done: {dest}")
+        return str(dest)
+    except OSError as e:
+        # e.g. out of space on /tmp — fall back to NFS
+        print(f"[stage] WARNING: local staging failed ({e}); using NFS path {src}")
+        return str(src)
+  
+# Usage in the notebook, before creating the datasets:
+COCO_ROOT = "/work/ngkuissi/Vision-Transformer-for-image-captioning/datasets"
+train_dir = stage_to_local(os.path.join(COCO_ROOT, "train2014"))
+val_dir   = stage_to_local(os.path.join(COCO_ROOT, "val2014"))
+
+data_set_root='datasets'
+train_set ='train2014'
+validation_set ='val2014'
+
+train_image_path = os.path.join(data_set_root, train_set)
+train_ann_file = '{}/annotations/captions_{}.json'.format(data_set_root, train_set)
+
+val_image_path = os.path.join(data_set_root, validation_set)
+val_ann_file = '{}/annotations/captions_{}.json'.format(data_set_root, validation_set)
+
+train_image_path = stage_to_local(os.path.join(data_set_root, train_set))
+val_image_path   = stage_to_local(os.path.join(data_set_root, validation_set))
 
 
-train_transform = transforms.Compose([transforms.Resize(IMAGE_SIZE),
-                                      transforms.RandomCrop(IMAGE_SIZE),
-                                      transforms.RandomHorizontalFlip(0.3),
-                                      transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-                                      transforms.ToTensor(),
-                                      transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                           std=[0.229, 0.224, 0.225]),
-                                      transforms.RandomErasing(p=0.1)])
+train_dataset = datasets.CocoCaptions(root=train_image_path,
+                                      annFile=train_ann_file,
+                                      transform=lambda x: PROCESSOR(images=x, return_tensors="pt")["pixel_values"].squeeze(0),
+                                      target_transform=SampleCaption())
 
-val_transform = transforms.Compose([transforms.Resize(IMAGE_SIZE),
-                                transforms.CenterCrop(IMAGE_SIZE),
-                                transforms.ToTensor(),
-                                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                     std=[0.229, 0.224, 0.225])]) 
-
-train_dataset = FlickrDataset(root_dir=folder, data_dict=train_data,
-                        transform=train_transform)
-train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                          collate_fn=custom_collate_fn, num_workers=12, prefetch_factor=24, 
-                          pin_memory=True, persistent_workers=True)
-val_dataset = FlickrDataset(root_dir=folder, data_dict=val_data,
-                        transform=val_transform)
-val_loader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate_fn,
-                          num_workers=8, prefetch_factor=24, pin_memory=True, persistent_workers=True)
+train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True,
+                          collate_fn=custom_collate_fn, num_workers=14, prefetch_factor=30)
 
 
-model = VisionEncoderDecoder(image_size=IMAGE_SIZE, channels_in=3, num_emb=tokenizer.vocab_size,
-                             patch_size=PATCH_SIZE, hidden_size=HIDDEN_SIZE, num_layers=NUM_LAYERS,
-                             num_heads=NUM_HEADS, mlp_dropout=0.3, att_dropout=0.3)
+val_dataset = datasets.CocoCaptions(root=val_image_path,
+                                    annFile=val_ann_file,
+                                    transform=lambda x: PROCESSOR(images=x, return_tensors="pt")["pixel_values"].squeeze(0),
+                                    target_transform=SampleCaption(False))
+val_loader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=lambda x: custom_collate_fn(x, train=False),
+                          num_workers=14, prefetch_factor=30)
+
+
+model = VisionEncoderDecoder(vocab_size=tokenizer.vocab_size, max_length=70, 
+                            num_layers=NUM_LAYERS, hidden_size=HIDDEN_SIZE, 
+                            num_heads=NUM_HEADS)
 model = model.to(DEVICE)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4,
-                              betas=(0.9, 0.999), eps=1e-8)
-loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)  # Added label_smoothing
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE,
+                              weight_decay=1e-4, betas=(0.9, 0.999), eps=1e-8)
+loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.1,
+                                    reduction="none")
 td = TokenDrop(0.5)
 
-
-# Setup learning rate scheduler
-def get_scheduler(optimizer, scheduler_type, num_epochs, num_training_steps):
-    """Create learning rate scheduler based on specified type.
-    
-    Returns:
-        tuple: (scheduler, is_batch_level) where is_batch_level indicates if scheduler
-               should be stepped per batch (True) or per epoch (False)
-    """
-    if scheduler_type == "cosine":
-        # Epoch-level scheduler
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=num_epochs, eta_min=MIN_LR
-        )
-        return scheduler, False
-        
-    elif scheduler_type == "cosine_warmup":
-        # Batch-level scheduler with warmup
-        warmup_steps = WARMUP_EPOCHS * num_training_steps // num_epochs
-        
-        def lr_lambda(current_step):
-            if current_step < warmup_steps:
-                # Linear warmup
-                return float(current_step) / float(max(1, warmup_steps))
-            # Cosine annealing after warmup
-            progress = float(current_step - warmup_steps) / float(max(1, num_training_steps - warmup_steps))
-            return max(MIN_LR / LEARNING_RATE, 0.5 * (1.0 + np.cos(np.pi * progress)))
-        
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-        return scheduler, True
-        
-    elif scheduler_type == "noam":
-        # Transformer/Noam scheduler (Attention is All You Need)
-        warmup_steps = WARMUP_EPOCHS * num_training_steps // num_epochs
-        
-        def lr_lambda(current_step):
-            current_step = max(1, current_step)  # Avoid division by zero
-            if current_step < warmup_steps:
-                # Linear warmup
-                return float(current_step) / float(warmup_steps)
-            # Inverse square root decay
-            return float(warmup_steps) ** 0.5 / float(current_step) ** 0.5
-        
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-        return scheduler, True
-        
-    elif scheduler_type == "step":
-        # Epoch-level scheduler
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=30, gamma=0.5
-        )
-        return scheduler, False
-        
-    elif scheduler_type == "plateau":
-        # Epoch-level scheduler (validation-based)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5, verbose=True, min_lr=MIN_LR
-        )
-        return scheduler, False
-        
-    elif scheduler_type == "onecycle":
-        # Batch-level scheduler
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=LEARNING_RATE, total_steps=num_training_steps,
-            pct_start=0.3, anneal_strategy='cos'
-        )
-        return scheduler, True
-    else:
-        return None, False
-
 num_training_steps = len(train_loader) * NEPOCHS
-scheduler, is_batch_level_scheduler = get_scheduler(optimizer, SCHEDULER_TYPE, NEPOCHS, num_training_steps)
+scheduler, is_batch_level_scheduler = get_scheduler(optimizer, SCHEDULER_TYPE, NEPOCHS, num_training_steps,
+                                                    min_lr=MIN_LR, learning_rate=LEARNING_RATE, warmup_epochs=WARMUP_EPOCHS,
+                                                    hidden_size=HIDDEN_SIZE)
+scaler = torch.cuda.amp.GradScaler()
 
 
 num_model_params = 0
+trainable = 0
 for param in model.parameters():
     num_model_params += param.flatten().shape[0]
+    trainable += param.flatten().shape[0] if param.requires_grad else 0
 
-print("This Model Has %d (Approximately %d Million) Parameters!" % (num_model_params, num_model_params//1e6))
+print(f"-This Model Has {num_model_params} (Approximately {num_model_params//1e6:.2f} Million) Parameters!")
+print(f"This Model Has {trainable} (Approximately {trainable/1e6:.2f} Million) Trainable Parameters!")
 if scheduler is not None:
     print(f"Using {SCHEDULER_TYPE} scheduler ({'batch-level' if is_batch_level_scheduler else 'epoch-level'})")
 
@@ -232,7 +208,7 @@ try:
         
         # Pass scheduler to train_epoch only if it's batch-level
         losses = train_epoch(model, train_loader, optimizer, DEVICE, loss_fn, td, 
-                            scheduler if is_batch_level_scheduler else None)
+                            scheduler=scheduler if is_batch_level_scheduler else None, scaler=scaler)
         train_losses.extend(losses)
         val_loss_list, bleu_1, bleu_2, bleu_3, bleu_4, meteor = val_epoch(model, val_loader, DEVICE,
                                                                        loss_fn, epoch, tokenizer, num_examples=3)

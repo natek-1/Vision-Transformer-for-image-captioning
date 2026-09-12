@@ -176,5 +176,6 @@ cython_debug/
 
 datasets/
 flickr30k/
+research/
 runs/
 *.pt

@@ -1,5 +1,6 @@
 import os
 import logging
+import random
 
 import numpy as np
 
@@ -14,62 +15,6 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[logging.FileHandler("training.log")])
 
-
-def train_val_split(caption_data, train_size=0.8, shuffle=True):
-    """Split the captioning dataset into train and validation sets.
-
-    Args:
-        caption_data (dict): Dictionary containing the mapped caption data
-        train_size (float): Fraction of all the full dataset to use as training data
-        shuffle (bool): Whether to shuffle the dataset before splitting
-
-    Returns:
-        Traning and validation datasets as two separated dicts
-    """
-
-    all_images = list(caption_data.keys())
-
-    if shuffle:
-        np.random.shuffle(all_images)
-
-    train_size = int(len(caption_data) * train_size)
-
-    training_data = {
-        img_name: caption_data[img_name] for img_name in all_images[:train_size]
-    }
-    validation_data = {
-        img_name: caption_data[img_name] for img_name in all_images[train_size:]
-    }
-    return training_data, validation_data
-
-
-def custom_collate_fn(batch):
-    '''
-    Custom collate function to handle batching of images and captions.
-    Args:
-        batch (list): List of tuples where each tuple is (image, caption_dict)
-    Returns:
-        dict: A dictionary with batched 'pixel_values', 'input_ids', and 'attention
-    '''
-    images = []
-    captions = []
-    attention_mask = []
-    
-    for entry in batch:
-        images.append(entry[0])
-        captions.append(entry[1]['input_ids'])
-        attention_mask.append(entry[1]['attention_mask'])
-        
-    # Stack images into a 4D tensor [B, C, H, W]
-    images = torch.stack(images, dim=0)
-    
-    captions = torch.stack(captions, dim=0)
-    
-    return {
-        'pixel_values': images,
-        'input_ids': captions,
-        'attention_mask': torch.stack(attention_mask, dim=0)
-    }
     
 def save_checkpoint(epoch, model, optimizer, best_val_loss, 
                    train_losses, val_losses, meteor_scores, bleu_scores,
@@ -139,8 +84,8 @@ def create_visualizations(train_losses, val_losses, train_epoch_loss, val_epoch_
     axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('plots/training_metrics_static.png', dpi=300, bbox_inches='tight')
-    print("Static plots saved to 'plots/training_metrics_static.png'")
+    plt.savefig('plotsv2/training_metrics_static.png', dpi=300, bbox_inches='tight')
+    print("Static plots saved to 'plotsv2/training_metrics_static.png'")
     plt.close()
     
     # 2. Interactive plots using plotly
@@ -223,5 +168,82 @@ def create_visualizations(train_losses, val_losses, train_epoch_loss, val_epoch_
         hovermode='x unified'
     )
     
-    fig.write_html('plots/training_metrics_interactive.html')
-    print("Interactive plots saved to 'plots/training_metrics_interactive.html'")
+    fig.write_html('plotsv2/training_metrics_interactive.html')
+    print("Interactive plots saved to 'plotsv2/training_metrics_interactive.html'")
+    
+def set_seed(seed=42):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+def get_scheduler(optimizer, scheduler_type, num_epochs, num_training_steps,
+                  min_lr, learning_rate, warmup_epochs, hidden_size):
+    """Create learning rate scheduler based on specified type.
+    
+    Returns:
+        tuple: (scheduler, is_batch_level) where is_batch_level indicates if scheduler
+               should be stepped per batch (True) or per epoch (False)
+    """
+    if scheduler_type == "cosine":
+        # Epoch-level scheduler
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=num_epochs, eta_min=min_lr
+        )
+        return scheduler, False
+        
+    elif scheduler_type == "cosine_warmup":
+        # Batch-level scheduler with warmup
+        warmup_steps = warmup_epochs * num_training_steps // num_epochs
+        
+        def lr_lambda(current_step):
+            if current_step < warmup_steps:
+                # Linear warmup
+                return float(current_step) / float(max(1, warmup_steps))
+            # Cosine annealing after warmup
+            progress = float(current_step - warmup_steps) / float(max(1, num_training_steps - warmup_steps))
+            return max(min_lr / learning_rate, 0.5 * (1.0 + np.cos(np.pi * progress)))
+        
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        return scheduler, True
+        
+    elif scheduler_type == "noam":
+        # Transformer/Noam scheduler (Attention is All You Need)
+        # lrate = d_model^(-0.5) * min(step^(-0.5), step * warmup^(-1.5))
+        warmup_steps = warmup_epochs * num_training_steps // num_epochs
+        d_model = hidden_size
+        
+        def lr_lambda(current_step):
+            current_step = max(1, current_step) # avoid division by zero
+            # Original formula from paper
+            arg1 = current_step ** (-0.5)
+            arg2 = current_step * (warmup_steps ** (-1.5))
+            return (d_model ** (-0.5)) * min(arg1, arg2)
+        
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        return scheduler, True
+        
+    elif scheduler_type == "step":
+        # Epoch-level scheduler
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=30, gamma=0.5
+        )
+        return scheduler, False
+        
+    elif scheduler_type == "plateau":
+        # Epoch-level scheduler (validation-based)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=5, verbose=True, min_lr=min_lr
+        )
+        return scheduler, False
+        
+    elif scheduler_type == "onecycle":
+        # Batch-level scheduler
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, max_lr=learning_rate, total_steps=num_training_steps,
+            pct_start=0.3, anneal_strategy='cos'
+        )
+        return scheduler, True
+    else:
+        return None, False

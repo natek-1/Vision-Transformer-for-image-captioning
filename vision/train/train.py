@@ -50,37 +50,41 @@ def calculate_corpus_bleu(references, hypotheses, weight=(0.25, 0.25, 0.25, 0.25
     return corpus_bleu(ref_tokens, hyp_tokens, weights=weight)
 
 
-def train_epoch(caption_model, train_loader, optimizer, device, loss_fn, td, scheduler=None):
+def train_epoch(caption_model, train_loader, optimizer,
+                device, loss_fn, td, scaler, scheduler=None):
     caption_model.train()
     epoch_loss = []
     batch_iterator = tqdm(train_loader, desc="Training", leave=False)
     for batch in batch_iterator:
-        random_index = random.randint(0, batch['input_ids'].size(1) - 1)
-        images = batch['pixel_values'].to(device)
-        captions = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
+        images, token_ids, attention_mask, _ = batch
+        images = images.to(device)
+        token_ids = token_ids.to(device)
+        attention_mask = attention_mask.to(device)
         
         # Shift the captions to create input and target sequences
-        input_captions = captions[:, random_index, :-1]
-        target_captions = captions[:, random_index, 1:].contiguous()
+        input_captions = token_ids[:,:-1]
+        target_captions = token_ids[:, 1:]
 
-        # Apply token dropping for regularization
+        # forward pass
         input_captions = td(input_captions)
         outputs = caption_model(input_image=images, 
-                                target_seq=input_captions, 
-                                padding_mask=attention_mask[:, random_index, :-1])
+                                input_seq=input_captions, 
+                                padding_mask=attention_mask[:,:-1])
         # Compute the loss
-        loss = loss_fn(outputs.view(-1, outputs.size(-1)), 
-                        target_captions.view(-1))
+        loss_mask = (~(target_captions == 0)).float()
+        loss = loss_fn(outputs.transpose(1, 2), 
+                        target_captions)
+        loss = (loss * loss_mask).sum() / loss_mask.sum()
         
         # Backpropagation and optimization step
         optimizer.zero_grad()
-        loss.backward()
+        scaler.scale(loss).backward()
         
         # Gradient clipping to prevent exploding gradients
-        torch.nn.utils.clip_grad_norm_(caption_model.parameters(), max_norm=1.0)
+        #torch.nn.utils.clip_grad_norm_(caption_model.parameters(), max_norm=1.0)
         
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         
         # Step scheduler if it's a batch-level scheduler (OneCycleLR)
         if scheduler is not None and hasattr(scheduler, 'step') and not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -92,7 +96,8 @@ def train_epoch(caption_model, train_loader, optimizer, device, loss_fn, td, sch
     return epoch_loss
 
 
-def val_epoch(model, val_loader, device, loss_fn, epoch, tokenizer, num_examples=5):
+def val_epoch(model, val_loader, device, loss_fn,
+              epoch, tokenizer, num_examples=5):
     epoch_loss = []
     references = []
     hypotheses = []
@@ -101,41 +106,41 @@ def val_epoch(model, val_loader, device, loss_fn, epoch, tokenizer, num_examples
         batch_iterator = tqdm(enumerate(val_loader), total=len(val_loader),
                              desc=f"Evaluation Processing Epoch: {epoch:02d}", leave=False)
         for idx, batch in batch_iterator:
-            images, captions = batch['pixel_values'].to(device), batch['input_ids'].to(device)
-            attention_masks = batch['attention_mask'].to(device)
+            images, token_ids, attention_mask, full_captions  = batch
+            images = images.to(device)
+            token_ids = token_ids.to(device)
+            attention_mask = attention_mask.to(device)
 
             # Shift the target sequence to the right by one position
-            sample_caption = captions[:, 0, :-1].clone()
-            sample_att_mask = attention_masks[:, 0, :-1].clone()
-            target_captions = captions[:, 0, 1:].clone().contiguous()
+            sample_caption = token_ids[:,:-1].clone()
+            sample_att_mask = attention_mask [:,:-1].clone()
+            target_captions = token_ids[:,1:].clone()
 
             # Forward pass through the model
-            outputs = model(input_image=images, target_seq=sample_caption, 
+            outputs = model(input_image=images, input_seq=sample_caption, 
                             padding_mask=sample_att_mask)
 
             # Compute the loss
-            loss = loss_fn(outputs.view(-1, outputs.size(-1)), 
-                           target_captions.view(-1))
-            #loss = (loss * mask).mean()
+            loss_mask = (~(target_captions == 0)).float()
+            loss = loss_fn(outputs.transpose(1, 2), 
+                        target_captions)
+            loss = (loss * loss_mask).sum() / loss_mask.sum()
             epoch_loss.append(loss.item())
             batch_iterator.set_postfix(loss=loss.item())
             
             # raw predictions
-            predictions = model.generate(input_image=images, 
-                                sos_token=tokenizer.cls_token_id,
-                                eos_token=tokenizer.sep_token_id, 
-                                pad_token=tokenizer.pad_token_id, 
-                                max_length=90, temp=0.0)
-            # Gather references and hypotheses for metric calculation
-            hypotheses.extend([tokenizer.decode(predictions[i], skip_special_tokens=True) for i in range(predictions.size(0))])
-            for i in range(captions.size(0)):
-                ref_captions = []
-                for ref_id in captions[i].tolist():
-                    ref_caption = tokenizer.decode(ref_id, skip_special_tokens=True)
-                    ref_captions.append(ref_caption)
-                references.append(ref_captions) # [32, 5]
+            if epoch > 20:
+                predictions = model.generate(input_image=images, 
+                                    sos_token=tokenizer.cls_token_id,
+                                    eos_token=tokenizer.sep_token_id, 
+                                    pad_token=tokenizer.pad_token_id, 
+                                    max_length=70, temp=0.1)
+                # Gather references and hypotheses for metric calculation
+                hypotheses.extend(tokenizer.batch_decode(predictions, skip_special_tokens=True))
+                references.extend(full_captions)
 
         #print samples
+        
         if len(hypotheses) > 0:
             indices = random.sample(range(len(hypotheses)), num_examples)
             logging.info(f"\n--- Epoch {epoch}, Sample {num_examples} Predictions vs References ---\n")
@@ -148,10 +153,17 @@ def val_epoch(model, val_loader, device, loss_fn, epoch, tokenizer, num_examples
             logging.info(str("-" * 100))
         
         # Calculate BLEU and METEOR scores
-        bleu_1 = calculate_corpus_bleu(references, hypotheses, weight=(1, 0, 0, 0))
-        bleu_2 = calculate_corpus_bleu(references, hypotheses, weight=(0.5, 0.5, 0, 0))
-        bleu_3 = calculate_corpus_bleu(references, hypotheses, weight=(0.33, 0.33, 0.33, 0))
-        bleu_4 = calculate_corpus_bleu(references, hypotheses)
-        meteor = calculate_corpus_meteor(references, hypotheses)
+        if epoch > 20:
+            bleu_1 = calculate_corpus_bleu(references, hypotheses, weight=(1, 0, 0, 0))
+            bleu_2 = calculate_corpus_bleu(references, hypotheses, weight=(0.5, 0.5, 0, 0))
+            bleu_3 = calculate_corpus_bleu(references, hypotheses, weight=(0.33, 0.33, 0.33, 0))
+            bleu_4 = calculate_corpus_bleu(references, hypotheses)
+            meteor = calculate_corpus_meteor(references, hypotheses)
+        else:
+            bleu_1 = 0
+            bleu_2 = 0
+            bleu_3 = 0
+            bleu_4 = 0
+            meteor = 0
 
     return epoch_loss, bleu_1, bleu_2, bleu_3, bleu_4, meteor

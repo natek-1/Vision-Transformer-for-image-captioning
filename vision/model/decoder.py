@@ -1,85 +1,45 @@
-import math
-
-
 import torch
 import torch.nn as nn
 
-from vision.model.attention import TransformerBlock
 
-
-# sinusoidal positional embeds
-class SinusoidalPosEmb(nn.Module):
-    '''
-    Sinusoidal Positional Embedding Module.
-    Args:
-        dim (int): Dimensionality of the positional embeddings.
-    Returns:
-        torch.Tensor: Positional embeddings of shape (batch_size, dim).
-    '''
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, x):
-        device = x.device
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
-        emb = x[:, None] * emb[None, :]
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        return emb
-
-
+# Define a decoder module from the gpt-2 architecture
 class Decoder(nn.Module):
-    def __init__(self, num_emb, hidden_size=128, num_layers=3, num_heads=4, 
-                 mlp_dropout=0.1, att_dropout=0.1):
-        '''
-        Transformer Decoder that generates sequences by attending to encoder outputs.
-        Args:
-            num_emb (int): Size of the vocabulary for token embeddings.
-            hidden_size (int): Dimensionality of input and output features.
-            num_layers (int): Number of transformer blocks.
-            num_heads (int): Number of attention heads.
-            mlp_dropout (float): Dropout rate for the feed-forward network.
-            att_dropout (float): Dropout rate for attention layers.
-        Returns:
-            torch.Tensor: Output logits of shape (batch_size, seq_length, num_emb).
-        '''
+    def __init__(self, vocab_size, max_length, hidden_size=128, num_layers=3, num_heads=4):
         super(Decoder, self).__init__()
         
-        # Create and Initialize an embedding layer for tokens
-        self.embedding = nn.Embedding(num_emb, hidden_size)
-        self.embedding.weight.data = 0.001 * self.embedding.weight.data
-
-        # Initialize sinusoidal positional embeddings
-        self.pos_emb = SinusoidalPosEmb(hidden_size)
+        # Create an embedding layer for tokens
+        self.token_embedding = nn.Embedding(vocab_size, hidden_size)
+        self.position_embedding = nn.Embedding(max_length, hidden_size)
         
-        # Create multiple transformer blocks as layers
-        self.blocks = nn.ModuleList([
-            TransformerBlock(hidden_size, num_heads, mlp_dropout=mlp_dropout, att_dropout=att_dropout,
-                             decoder=True) for _ in range(num_layers)
-        ])
+        # Create multiple decoder layers
+        decoder_layer = nn.TransformerDecoderLayer(d_model=hidden_size, nhead=num_heads, 
+                                                   dim_feedforward=hidden_size * 4, dropout=0.0,
+                                                   batch_first=True, norm_first=True)
+        # TransformerDecoder will clone the decoder_layer "num_layers" times
+        self.decoder_layers = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+
+        self.register_buffer('tril', torch.tril(torch.ones(max_length, max_length)))
+        self.norm = nn.LayerNorm(hidden_size)
                 
         # Define a linear layer for output prediction
-        self.layer_norm = nn.LayerNorm(hidden_size)
-        self.fc_out = nn.Linear(hidden_size, num_emb)
+        self.fc_out = nn.Linear(hidden_size, vocab_size)
         
     def forward(self, input_seq, encoder_output, input_padding_mask=None, 
                 encoder_padding_mask=None):        
         # Embed the input sequence
-        input_embs = self.embedding(input_seq)
-        bs, l, h = input_embs.shape
+        input_embs = self.token_embedding(input_seq)
+        batch_size, seq_len, hidden_size = input_embs.shape
 
         # Add positional embeddings to the input embeddings
-        seq_indx = torch.arange(l, device=input_seq.device)
-        pos_emb = self.pos_emb(seq_indx).reshape(1, l, h).expand(bs, l, h)
-        embs = input_embs + pos_emb
+        seq_idx = torch.arange(seq_len, device=input_seq.device)
+        seq_idx = self.position_embedding(seq_idx)
+        seq_idx = seq_idx.unsqueeze(0)
+        embs = input_embs + seq_idx
+        casual_mask = self.tril[:seq_len, :seq_len] == 0
         
         # Pass the embeddings through each transformer block
-        for block in self.blocks:
-            embs = block(embs, 
-                           input_key_mask=input_padding_mask, 
-                           cross_key_mask=encoder_padding_mask, 
-                           kv_cross=encoder_output)
+        output = self.decoder_layers(tgt=embs, memory=encoder_output, tgt_mask=casual_mask,
+                                     tgt_key_padding_mask=input_padding_mask, 
+                                     memory_key_padding_mask=encoder_padding_mask)
         
-        return self.fc_out(self.layer_norm(embs))
+        return self.fc_out(self.norm(output))
