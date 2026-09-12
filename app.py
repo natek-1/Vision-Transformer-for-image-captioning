@@ -1,3 +1,4 @@
+from torch._C import _VariableFunctions
 from flask import Flask, render_template, request, jsonify
 import os
 import torch
@@ -6,73 +7,56 @@ import base64
 import io
 import torchvision.transforms as transforms
 from transformers import AutoTokenizer
+from transformers import ViTImageProcessor
 
 from vision.model.caption import VisionEncoderDecoder
 from vision.inference.run import infer_caption
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-# Ensure upload directory exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# --- Model & Config ---
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CHECKPOINT_PATH = "model_weights.pt" 
+DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+CHECKPOINT_PATH = "best_meteor_model.pt" 
 
-# Hyperparameters (must match training)
-IMAGE_SIZE = 128
-HIDDEN_SIZE = 192
-NUM_LAYERS = (6, 6)
+HIDDEN_SIZE = 512
+NUM_LAYERS = 12
 NUM_HEADS = 8
-PATCH_SIZE = 8
-MAX_LENGTH = 90
+MAX_LENGTH = 70
 
 print("Loading tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
 
 print("Initializing model...")
-model = VisionEncoderDecoder(image_size=IMAGE_SIZE, channels_in=3, num_emb=tokenizer.vocab_size,
-                             patch_size=PATCH_SIZE, hidden_size=HIDDEN_SIZE, num_layers=NUM_LAYERS,
-                             num_heads=NUM_HEADS, mlp_dropout=0.1, att_dropout=0.1)
+model = VisionEncoderDecoder(vocab_size=tokenizer.vocab_size, max_length=MAX_LENGTH, 
+                            num_layers=NUM_LAYERS, hidden_size=HIDDEN_SIZE, 
+                            num_heads=NUM_HEADS)
 
 model.to(DEVICE)
 
 if os.path.exists(CHECKPOINT_PATH):
     print(f"Loading weights from {CHECKPOINT_PATH}...")
     try:
-        # The main.py saves state_dict directly to model_weights.pt in some cases
-        # or it saves a full checkpoint dict to checkpoints/model_checkpoint.pt
-        # The user file list shows 'model_weights.pt', let's assume it's the state dict.
-        # But wait, main.py says: torch.save(model.state_dict(), "model_weights.pt")
-        # So it is just the state dict.
         state_dict = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
         model.load_state_dict(state_dict)
         print("Model loaded successfully.")
     except Exception as e:
         print(f"Error loading model: {e}")
-        # As a fallback, try loading as a checkpoint dictionary if the above fails
         try:
-           checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
-           if 'model_state_dict' in checkpoint:
-               model.load_state_dict(checkpoint['model_state_dict'])
-               print("Model loaded from checkpoint dict successfully.")
-        except:
-           print("Fatal error loading model.")
+            checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+            if 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+                print("Model loaded from checkpoint dict successfully.")
+        except Exception as e:
+            raise ValueError(f"Fatal error loading model. Error: {e}")
 else:
-    print(f"Warning: {CHECKPOINT_PATH} not found. Running with random weights.")
+    raise FileNotFoundError(f"Error: {CHECKPOINT_PATH} not found.")
 
 model.eval()
 
-# --- Preprocessing ---
-val_transform = transforms.Compose([
-    transforms.Resize(IMAGE_SIZE),
-    transforms.CenterCrop(IMAGE_SIZE),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
-])
+PROCESSOR = ViTImageProcessor.from_pretrained('google/vit-large-patch16-224-in21k')
 
 @app.route('/')
 def index():
@@ -100,7 +84,7 @@ def generate_caption():
         image = Image.open(file.stream).convert('RGB')
         
         # Preprocess
-        input_tensor = val_transform(image)
+        input_tensor = PROCESSOR(image, return_tensors="pt")["pixel_values"].squeeze(0)
         
         # Generate caption
         caption = infer_caption(model, input_tensor, tokenizer, DEVICE, max_length=MAX_LENGTH, temp=temperature)

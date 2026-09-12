@@ -15,7 +15,7 @@ def load_model(model, checkpoint_path, device):
     print("Model weights loaded successfully.")
 
 
-def infer_caption(caption_model, image_tensor, tokenizer, device, max_length=90, temp=0.0):
+def infer_caption(caption_model, image_tensor, tokenizer, device, max_length=70, temp=0.01):
     '''
     Generate caption for a given image tensor using the caption model.
     Args:
@@ -30,7 +30,7 @@ def infer_caption(caption_model, image_tensor, tokenizer, device, max_length=90,
     '''
     caption_model.eval()
     
-    image_tensor = image_tensor.to(device).unsqueeze(0)  # Add batch dimension
+    image_tensor = image_tensor.to(device).unsqueeze(0)
     with torch.inference_mode():
         generated_ids = caption_model.generate(
             input_image=image_tensor,
