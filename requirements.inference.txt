@@ -1,0 +1,7 @@
+torch==2.9.1
+torchvision==0.24.1
+transformers==4.57.3
+Pillow
+numpy
+flask
+protobuf==3.20
