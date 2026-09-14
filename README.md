@@ -150,14 +150,40 @@ The container ships only the runtime dependencies needed for `app.py` (no traini
 
 ---
 
-## 🌐 Deploy to Hugging Face Spaces
+## 🌐 Deploy to Hugging Face Spaces (Gradio — free)
 
-The Flask app can be hosted as a live demo:
+A ready-to-use Gradio app (`gradio_app.py`) is provided so the model can be
+hosted on a **free** Hugging Face Gradio Space (Docker Spaces require a paid tier).
 
-1. Create a new **Space** (SDK: *Docker* or *Gradio/Streamlit* wrapper) at <https://huggingface.co/new-space>.
-2. For a Docker Space, point it at `Dockerfile.inference`.
-3. Upload the model weights (`best_meteor_model.pt`) using [Git LFS](https://git-lfs.com/) or the Hub UI, since the file is large.
-4. Once the Space builds, update the **Live Demo** link at the top of this README with your Space URL.
+1. Create a new **Space** at <https://huggingface.co/new-space> with **SDK: Gradio**.
+2. Add this Space metadata to the top of the Space's `README.md` (or set it in the UI):
+   ```yaml
+   ---
+   title: Vision Transformer Image Captioning
+   emoji: 🖼️
+   sdk: gradio
+   app_file: gradio_app.py
+   ---
+   ```
+3. Push the app to the Space repo:
+   - `gradio_app.py`
+   - the `vision/` package
+   - `requirements.gradio.txt` **copied to `requirements.txt`** (HF Spaces install
+     from a file named exactly `requirements.txt`).
+4. **Weights are downloaded automatically at startup** from the public Hub repo
+   [`ngkuissi/vit-vit-large-patch16-224-in21k-gpt-2-w-cross-attention`](https://huggingface.co/ngkuissi/vit-vit-large-patch16-224-in21k-gpt-2-w-cross-attention),
+   so nothing extra needs to be uploaded to the Space. To use a different repo,
+   set the Space variables `MODEL_REPO_ID` and (optionally) `MODEL_FILENAME`.
+5. Once the Space builds, update the **Live Demo** link at the top of this README.
+
+### Run the Gradio app locally
+
+```bash
+pip install -r requirements.gradio.txt
+python gradio_app.py
+```
+
+Then open <http://localhost:7860>.
 
 ---
 
@@ -165,8 +191,10 @@ The Flask app can be hosted as a live demo:
 
 ```
 ├── app.py                     # Flask inference web app
+├── gradio_app.py              # Gradio demo app (free HF Spaces)
 ├── Dockerfile.inference       # CPU-only inference image
 ├── requirements.inference.txt # Pinned runtime deps for the container
+├── requirements.gradio.txt    # Pinned deps for the Gradio Space
 ├── requirements.txt           # Full (training) dependencies
 ├── plotsv2/                   # Training metric plots
 ├── vision/

@@ -179,3 +179,5 @@ flickr30k/
 research/
 runs/
 *.pt
+.vercel
+.env*
