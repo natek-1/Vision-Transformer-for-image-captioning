@@ -1,20 +1,10 @@
-# Dependencies for the free Hugging Face Gradio Space (CPU).
-#
-# HF Spaces install from a file named `requirements.txt`. When deploying,
-# copy the contents of THIS file into the Space's requirements.txt
-# (see the "Deploy to Hugging Face Spaces (Gradio)" section of the README).
-#
-# transformers is pinned: the ViTModel internal layer naming changed across
-# versions and the checkpoint was saved with 4.57.3. A different version
-# produces mismatched state_dict keys and load_state_dict fails.
-#
-# gradio<5 / huggingface_hub<1.0 are pinned to avoid a dependency conflict:
-# newer gradio pulls huggingface_hub>=1.0, which transformers 4.57.3 rejects.
-gradio==4.44.1
 torch==2.9.1
 torchvision==0.24.1
 transformers==4.57.3
 huggingface_hub==0.36.2
+fastapi==0.115.6
+starlette==0.41.3
+spaces
 Pillow
 numpy
 protobuf==3.20

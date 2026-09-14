@@ -1,16 +1,3 @@
-"""
-Gradio demo for the ViT + GPT-style image captioning model.
-
-Runs on a free Hugging Face Gradio Space (CPU). It reuses the exact model
-definition and inference routine from the training/Flask code so the demo
-behaves identically to `app.py`.
-
-Model weights (`best_meteor_model.pt`) are loaded from, in order:
-  1. a local file if present (CHECKPOINT_PATH, useful for local development), else
-  2. the public Hugging Face Hub repo set in MODEL_REPO_ID (the default), so the
-     Space works without shipping the ~1.5 GB checkpoint in the app repo.
-"""
-
 import os
 
 import torch
@@ -20,8 +7,59 @@ from transformers import AutoTokenizer, ViTImageProcessor
 from vision.model.caption import VisionEncoderDecoder
 from vision.inference.run import infer_caption
 
+try:
+    import spaces  # provided by the ZeroGPU runtime
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu" 
+    _ZEROGPU = True
+except Exception:  # not on ZeroGPU (local dev, CPU Space, etc.)
+    _ZEROGPU = False
+
+    class _SpacesShim:
+        @staticmethod
+        def GPU(*args, **kwargs):
+            # Support both @spaces.GPU and @spaces.GPU(duration=...) forms.
+            if len(args) == 1 and callable(args[0]) and not kwargs:
+                return args[0]
+
+            def _decorator(fn):
+                return fn
+
+            return _decorator
+
+    spaces = _SpacesShim()
+
+
+def _patch_gradio_client_bool_schema() -> None:
+    try:
+        import gradio_client.utils as _gcu
+    except Exception:
+        return
+
+    _orig_get_type = getattr(_gcu, "get_type", None)
+    if _orig_get_type is not None:
+        def _safe_get_type(schema):
+            if not isinstance(schema, dict):
+                return "Any"
+            return _orig_get_type(schema)
+        _gcu.get_type = _safe_get_type
+
+    _orig_j2p = getattr(_gcu, "_json_schema_to_python_type", None)
+    if _orig_j2p is not None:
+        def _safe_j2p(schema, defs=None):
+            if not isinstance(schema, dict):
+                return "Any"
+            return _orig_j2p(schema, defs)
+        _gcu._json_schema_to_python_type = _safe_j2p
+
+
+_patch_gradio_client_bool_schema()
+
+print(f"gradio version in use: {gr.__version__}")
+
+if _ZEROGPU:
+    DEVICE = "cuda"
+else:
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", "best_meteor_model.pt")
 
 MODEL_REPO_ID = os.environ.get(
@@ -76,11 +114,13 @@ print("Model loaded successfully.")
 PROCESSOR = ViTImageProcessor.from_pretrained("google/vit-large-patch16-224-in21k")
 
 
-# ----------------------------------------------------------------------------
-# Inference function
-# ----------------------------------------------------------------------------
+@spaces.GPU(duration=60)
 def caption_image(image, temperature: float = 0.5) -> str:
-    """Generate a caption for a PIL image using the loaded model."""
+    """Generate a caption for a PIL image using the loaded model.
+
+    Decorated with @spaces.GPU so ZeroGPU allocates a GPU for the duration of
+    the call. The decorator is a no-op (via the shim above) off ZeroGPU.
+    """
     if image is None:
         return "Please upload an image."
 
@@ -98,19 +138,10 @@ def caption_image(image, temperature: float = 0.5) -> str:
     return caption
 
 
-# ----------------------------------------------------------------------------
-# Gradio UI
-# ----------------------------------------------------------------------------
 DESCRIPTION = """
 # 🖼️ Image Captioning with Vision Transformers
 
 Upload an image and this model will describe it in natural language.
-
-A **frozen ViT-Large encoder** extracts visual features and a **from-scratch,
-GPT-2–style Transformer decoder** generates the caption one token at a time.
-Trained end-to-end on **MS-COCO 2014**.
-
-*Lower temperature → more literal, repeatable captions. Higher temperature → more varied wording.*
 """
 
 demo = gr.Interface(
@@ -132,5 +163,8 @@ demo = gr.Interface(
 )
 
 if __name__ == "__main__":
-    # server_name="0.0.0.0" is required so the app is reachable inside a Space.
-    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)))
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=int(os.environ.get("PORT", 7860)),
+        show_api=False,
+    )
