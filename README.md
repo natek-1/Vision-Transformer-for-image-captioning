@@ -119,7 +119,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-make sure to download the model to run it locally: (Link here)[https://huggingface.co/ngkuissi/vit-vit-large-patch16-224-in21k-gpt-2-w-cross-attention/tree/main]
+make sure to download the model to run it locally: [Link here](https://huggingface.co/ngkuissi/vit-vit-large-patch16-224-in21k-gpt-2-w-cross-attention/tree/main)
 
 Then open <http://localhost:5000> and upload an image.
 
