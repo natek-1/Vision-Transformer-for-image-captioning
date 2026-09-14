@@ -181,3 +181,4 @@ runs/
 *.pt
 .vercel
 .env*
+image-captioning-with-transformers/

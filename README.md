@@ -2,10 +2,9 @@
 
 Generate natural-language descriptions of images using a **Vision Transformer (ViT) encoder** paired with a **GPT-style autoregressive Transformer decoder**, trained end-to-end on the **MS-COCO** dataset.
 
-> **🚀 Live Demo:** [Try it on Hugging Face Spaces](https://huggingface.co/spaces/natek-1/vision-transformer-image-captioning)
+> **🚀 Live Demo:** [Try it on Hugging Face Spaces](https://huggingface.co/spaces/ngkuissi/image-captioning-with-transformers)
 > _Upload any image and get an instant caption._
 
-<!-- Replace the link above with your actual Space URL once published (see "Deploy to Hugging Face Spaces" below). -->
 
 ---
 
@@ -162,9 +161,14 @@ hosted on a **free** Hugging Face Gradio Space (Docker Spaces require a paid tie
    title: Vision Transformer Image Captioning
    emoji: 🖼️
    sdk: gradio
+   sdk_version: 4.44.1
    app_file: gradio_app.py
    ---
    ```
+   > **Pin `sdk_version: 4.44.1`.** The Space defaults to a newer gradio (6.x) that
+   > requires `huggingface_hub>=1.0`, which conflicts with `transformers==4.57.3`
+   > (needs `<1.0`). Do **not** also pin `gradio` in `requirements.txt` — that
+   > causes a build conflict. Let `sdk_version` control the gradio version.
 3. Push the app to the Space repo:
    - `gradio_app.py`
    - the `vision/` package
